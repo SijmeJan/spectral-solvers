@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.linalg import eigvals, eig
+import scipy.sparse as sparse
 
 from .basis import ChebychevBasis, BoundaryCondition, HermiteBasis, LaguerreBasis
 from .mapping import CoordinateMap, ChebychevMap
@@ -140,17 +141,20 @@ class EigenValueSolver(SpectralSolver):
         return self.ddA
 
     def solve(self, N, L=1, n_eq=1, **kwargs):
-        # kwargs: kx, equilibrium, neglect_gas_viscosity
-
-        # Scale factor for mapping infinite interval to [-1,1]
-        #self.L = np.sqrt(self.eq.viscous_alpha/self.eq.size_density.amax)
-
         self.set_resolution(N, L=L, n_eq=n_eq)
 
         # Construct left-hand side matrix
         M = self.matrixM(**kwargs)
 
-        return eig(M, self.B)
+        use_sparse = False
+
+        if use_sparse is True:
+            M_csr = sparse.csr_matrix(M)
+            B_csr = sparse.csr_matrix(self.B)
+
+            return sparse.linalg.eigs(M_csr, M=B_csr, which='SM')
+        else:
+            return eig(M, self.B)
 
     def safe_eval_evec(self, eval_low, evec_low, eval_hi, evec_hi,
                        drift_threshold=1e6, use_ordinal=False,

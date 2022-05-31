@@ -2,6 +2,7 @@
 
 import numpy as np
 from enum import Enum
+import h5py as h5
 
 from .hermite import HermiteFunc
 from .laguerre import LaguerreFunc
@@ -190,7 +191,7 @@ class ChebychevBasis():
         '''Evaluate basis functions at general x (derivatives up to 2)'''
 
         # Make sure |x| < 1 for derivatives
-        s = 1.0e-6
+        s = 1.0e-5
         #x = x - s*s*x/(np.abs(x) - 1 + s)/(np.abs(x) + s)
         x = x - np.sign(x)*s*s/(np.abs(x-1) + s)
 
@@ -251,12 +252,30 @@ class ChebychevBasis():
 
         return u
 
+    def derivative_matrices(self):
+        N = len(self.collocation_points())
+
+        # Matrix with psi_n(t_i) in the nth column
+        A = np.zeros((N, N))
+        # Matrix with d_z psi_n(t_i) in the nth column
+        dA = np.zeros((N, N))
+        # Matrix with d_z^2 psi_n)(t_i) in the nth column
+        ddA = np.zeros((N, N))
+
+        for n in range(self.start_n, self.end_n):
+            i = n - self.start_n
+            A[:, i] = self.evaluate(n)
+            dA[:, i] = self.evaluate(n, 1)
+            ddA[:, i] = self.evaluate(n, 2)
+
+        return A, dA, ddA
+
 class HermiteBasis():
     """
     Hermite basis for boundary-value problems
 
     """
-    def __init__(self, N, L=1, symmetry=None):
+    def __init__(self, N, L=1, symmetry=None, filename=None):
         self.N = N
         self.start_n = 0
         self.end_n = N
@@ -273,6 +292,8 @@ class HermiteBasis():
             self.x = np.polynomial.hermite.hermroots(np.eye(2*N+1)[-1,:])
             self.x = self.x[-N:]
 
+        self.filename = filename
+
     def collocation_points(self):
         return self.x
 
@@ -280,16 +301,6 @@ class HermiteBasis():
         '''Evaluate kth derivative of basis functions at collocation points'''
 
         return self.interpolate(n, self.x, k=k)
-
-        #if self.symmetry == 'even':
-        #    n = 2*n
-        #if self.symmetry == 'odd':
-        #    n = 2*n + 1
-
-        #if k == 0:
-        #    return HermiteFunc(n)(self.x)
-
-        #return HermiteFunc(n).derivative(self.x, k=k)
 
     def interpolate(self, n, x, k=0):
         '''Evaluate basis functions at general x'''
@@ -311,6 +322,46 @@ class HermiteBasis():
 
         return u
 
+    def derivative_matrices(self):
+        N = len(self.collocation_points())
+        N_string = str(N)
+
+        found_in_file = False
+        if self.filename is not None:
+            # Try and read from HDF file
+            with h5.File(self.filename, 'a') as hf:
+                if N_string in hf:
+                    found_in_file = True
+                    #print('Found matrices in file for N =', N)
+                    g = hf[N_string]
+                    A = g.get('A')[()]
+                    dA = g.get('dA')[()]
+                    ddA = g.get('ddA')[()]
+
+        if found_in_file is False:
+            # Matrix with psi_n(t_i) in the nth column
+            A = np.zeros((N, N))
+            # Matrix with d_z psi_n(t_i) in the nth column
+            dA = np.zeros((N, N))
+            # Matrix with d_z^2 psi_n)(t_i) in the nth column
+            ddA = np.zeros((N, N))
+
+            for n in range(self.start_n, self.end_n):
+                i = n - self.start_n
+                A[:, i] = self.evaluate(n)
+                dA[:, i] = self.evaluate(n, 1)
+                ddA[:, i] = self.evaluate(n, 2)
+
+            # Write to HDF file
+            if self.filename is not None:
+                #print('Saving matrices in file for N =', N)
+                with h5.File(self.filename, 'a') as hf:
+                    g = hf.create_group(N_string)
+                    g.create_dataset('A', data=A)
+                    g.create_dataset('dA', data=dA)
+                    g.create_dataset('ddA', data=ddA)
+
+        return A, dA, ddA
 
 class LaguerreBasis():
     """
@@ -353,3 +404,21 @@ class LaguerreBasis():
             u += coef[n - self.start_n]*self.interpolate(n, t, k=k)
 
         return u
+
+    def derivative_matrices(self):
+        N = len(self.collocation_points())
+
+        # Matrix with psi_n(t_i) in the nth column
+        A = np.zeros((N, N))
+        # Matrix with d_z psi_n(t_i) in the nth column
+        dA = np.zeros((N, N))
+        # Matrix with d_z^2 psi_n)(t_i) in the nth column
+        ddA = np.zeros((N, N))
+
+        for n in range(self.start_n, self.end_n):
+            i = n - self.start_n
+            A[:, i] = self.evaluate(n)
+            dA[:, i] = self.evaluate(n, 1)
+            ddA[:, i] = self.evaluate(n, 2)
+
+        return A, dA, ddA

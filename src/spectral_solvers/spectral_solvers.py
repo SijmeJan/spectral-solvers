@@ -170,7 +170,7 @@ class EigenValueSolver(SpectralSolver):
 
     def solve(self, N, L=1, n_eq=1,
               sparse_flag=False, sigma=None, n_eig=6,
-              use_PETSc=False
+              use_PETSc=False,
               **kwargs):
         self.set_resolution(N, L=L, n_eq=n_eq, sparse_flag=sparse_flag)
 

@@ -1,6 +1,10 @@
 import numpy as np
 from scipy.linalg import eigvals, eig
 import scipy.sparse as sparse
+import matplotlib.pyplot as plt
+
+from petsc4py import PETSc
+from slepc4py import SLEPc
 
 from .basis import ChebychevBasis, BoundaryCondition, HermiteBasis, LaguerreBasis
 from .mapping import CoordinateMap, ChebychevMap
@@ -19,11 +23,14 @@ class SpectralSolver():
         self.symmetry = symmetry
         self.interval = interval
 
-    def set_resolution(self, N, L=1, n_eq=1):
+        self.N = -1
+
+    def set_resolution(self, N, L=1, n_eq=1, sparse_flag=False):
         # Coordinate mapping and basis functions
         if self.basis_kind == 'Hermite':
             self.mapping = CoordinateMap(L=L)
-            self.basis = HermiteBasis(N, symmetry=self.symmetry)
+            self.basis = HermiteBasis(N, symmetry=self.symmetry,
+                                      filename='hermite.h5')
         elif self.basis_kind == 'Laguerre':
             self.mapping = CoordinateMap(L=L)
             if self.symmetry == 'even':
@@ -50,36 +57,38 @@ class SpectralSolver():
         self.construct_a()
 
         # Block-diagonal matrix with A's on the diagonal
-        self.B = self.A
-        for i in range(1, n_eq):
-            # Zeros in upper right and lower left
-            UR = np.zeros((np.shape(self.B)[0], np.shape(self.A)[0]))
-            LL = np.zeros((np.shape(self.A)[0], np.shape(self.B)[1]))
-            # Add block
-            self.B = np.block([[self.B, UR], [LL, self.A]])
+        indptr = np.asarray(range(0, n_eq + 1))
+        indices = np.asarray(range(0, n_eq))
+        data = []
+        for i in range(0, n_eq):
+            data.append(self.A)
+        data = np.asarray(data)
 
-    def construct_a(self):
+        self.B = \
+          sparse.bsr_matrix((data, indices, indptr), shape=(n_eq*N, n_eq*N))
+
+        if sparse_flag == False:
+            self.B = self.B.todense()
+
+    def construct_a(self, filename=None):
         t = self.basis.collocation_points()
+        #print('Start constructing A for N = ', len(t))
 
         dtdz = self.mapping.dtdx(t)
         d2tdz2 = self.mapping.d2tdx2(t)
 
         N = len(t)
 
-        # Matrix with psi_n(t_i) in the nth column
-        self.A = np.zeros((N, N))
-        # Matrix with dtdz(t_i)*d_z psi_n in the nth column
-        self.dA = np.zeros((N, N))
-        # Matrix with (d2tdz2*d_z psi_n + (dtdz)**2*d_z^2 psi_n)(t_i)
-        self.ddA = np.zeros((N, N))
+        if N != self.N:
+            self.A, self.dA, self.ddA = \
+              self.basis.derivative_matrices()
 
-        for n in range(self.basis.start_n, self.basis.end_n):
-            i = n - self.basis.start_n
-            self.A[:, i] = self.basis.evaluate(n)
-            self.dA[:, i] = dtdz*self.basis.evaluate(n, 1)
-            self.ddA[:, i] = \
-              d2tdz2*self.basis.evaluate(n, 1) + \
-              dtdz*dtdz*self.basis.evaluate(n, 2)
+            self.N = N
+
+            self.dA = self.dA*dtdz[:,np.newaxis]
+            self.ddA = self.ddA*(dtdz*dtdz)[:,np.newaxis] + \
+              self.dA*(d2tdz2/dtdz)[:,np.newaxis]
+        #print('Done constructing A for N = ', N)
 
     def construct_m(self, f, k=0):
         # f should be vector of N-1 elements at z collocation points
@@ -103,6 +112,20 @@ class SpectralSolver():
         u = np.zeros((n_eq, len(t)), dtype=sol[0].dtype)
         for m in range(0, n_eq):
             u[m, :] = self.basis.summation(sol[m, :], t, k=k)
+
+        if k == 1:
+            dtdx = self.mapping.dtdx(t)
+            u = u*dtdx
+
+        if k == 2:
+            du = np.zeros((n_eq, len(t)), dtype=sol[0].dtype)
+            for m in range(0, n_eq):
+                du[m, :] = self.basis.summation(sol[m, :], t, k=1)
+
+            dtdx = self.mapping.dtdx(t)
+            d2tdx2 = self.mapping.d2tdx2(t)
+
+            u = dtdx*dtdx*u + d2tdx2*du
 
         z = self.mapping.x(t)
 
@@ -140,19 +163,67 @@ class EigenValueSolver(SpectralSolver):
     def matrixM(self):
         return self.ddA
 
-    def solve(self, N, L=1, n_eq=1, **kwargs):
-        self.set_resolution(N, L=L, n_eq=n_eq)
+    def solve(self, N, L=1, n_eq=1,
+              sparse_flag=False, sigma=None, n_eig=6,
+              **kwargs):
+        #print('EigenvalueSolver.solve:', N, L, n_eq, sparse_flag, sigma, n_eig)
+
+        self.set_resolution(N, L=L, n_eq=n_eq, sparse_flag=sparse_flag)
 
         # Construct left-hand side matrix
-        M = self.matrixM(**kwargs)
+        M = self.matrixM(sparse_flag=sparse_flag, **kwargs)
 
-        use_sparse = False
+        #print('Matrix size:', N*(4*n_eq + 4))
 
-        if use_sparse is True:
-            M_csr = sparse.csr_matrix(M)
-            B_csr = sparse.csr_matrix(self.B)
+        use_PETSc = True
 
-            return sparse.linalg.eigs(M_csr, M=B_csr, which='SM')
+        if sparse_flag == True:
+            if use_PETSc == True:
+                petsc_M = PETSc.Mat().createBAIJ(size=M.shape,
+                                                 bsize=M.blocksize,
+                                                 csr=(M.indptr,
+                                                      M.indices,
+                                                      M.data))
+                #petsc_B = PETSc.Mat().createBAIJ(size=self.B.shape,
+                #                                 bsize=self.B.blocksize,
+                #                                 csr=(self.B.indptr,
+                #                                      self.B.indices,
+                #                                      self.B.data))
+
+                SLEPcSolver = SLEPc.EPS()
+                SLEPcSolver.create()
+                SLEPcSolver.setDimensions(nev=n_eig)
+                shift = SLEPc.ST().create()
+                shift.setType(SLEPc.ST.Type.SINVERT)
+                SLEPcSolver.setST(shift)
+                SLEPcSolver.setTarget(sigma)
+
+                SLEPcSolver.setOperators(petsc_M)#, petsc_B)
+                SLEPcSolver.setProblemType(SLEPc.EPS.ProblemType.NHEP)
+
+                SLEPcSolver.solve()
+
+                nconv = SLEPcSolver.getConverged()
+
+                # Create the results vectors
+                vr, wr = petsc_M.getVecs()
+                vi, wi = petsc_M.getVecs()
+
+                n_found = np.min([nconv, n_eig])
+                eigenvalues = np.zeros((n_found), dtype=np.cdouble)
+                eigenvectors = np.zeros((N*n_eq, n_found), dtype=np.cdouble)
+
+                for i in range(0, n_found):
+                    k = SLEPcSolver.getEigenpair(i, vr, vi)
+                    eigenvalues[i] = k
+                    eigenvectors[:, i] = vr.getArray() + 1j*vi.getArray()
+
+                ret = eigenvalues, eigenvectors
+            else:
+                ret = sparse.linalg.eigs(M, k=n_eig, M=None,
+                                         sigma=sigma, which='LM')
+
+            return ret
         else:
             return eig(M, self.B)
 
@@ -185,15 +256,18 @@ class EigenValueSolver(SpectralSolver):
         # Compute sigmas from lower resolution run (gridnum = N1)
         degen = degeneracy
         sigmas = np.zeros(len(eval_low_sorted))
-        sigmas[0:degen] = np.abs(eval_low_sorted[0:degen] - \
-                                 eval_low_sorted[degen:2*degen])
-        sigmas[degen:-degen] = \
-          [0.5*(np.abs(eval_low_sorted[j] - \
-                       eval_low_sorted[j - degen]) + \
-                np.abs(eval_low_sorted[j + degen] - eval_low_sorted[j])) \
-                for j in range(degen, len(eval_low_sorted) - degen)]
-        sigmas[-degen:] = np.abs(eval_low_sorted[-2*degen:-degen] - \
-                                 eval_low_sorted[-degen:])
+        if len(sigmas) > degen:
+            sigmas[0:degen] = np.abs(eval_low_sorted[0:degen] - \
+                                     eval_low_sorted[degen:2*degen])
+            sigmas[degen:-degen] = \
+              [0.5*(np.abs(eval_low_sorted[j] - \
+                    eval_low_sorted[j - degen]) + \
+                  np.abs(eval_low_sorted[j + degen] - eval_low_sorted[j])) \
+                  for j in range(degen, len(eval_low_sorted) - degen)]
+            sigmas[-degen:] = np.abs(eval_low_sorted[-2*degen:-degen] - \
+                                     eval_low_sorted[-degen:])
+        else:
+            sigmas += 1.0
 
         if not (np.isfinite(sigmas)).all():
             logger.warning("At least one eigenvalue spacings (sigmas) is non-finite (np.inf or np.nan)!")
@@ -228,12 +302,27 @@ class EigenValueSolver(SpectralSolver):
 
         return eval_low, evec
 
-    def safe_solve(self, N, L=1, n_eq=1, factor=2,
-                   drift_threshold=1e6, use_ordinal=False,
+    def safe_solve(self, N, L=1, n_eq=1,
+                   sparse_flag=False, sigma=None, n_eig=6,
+                   factor=2, drift_threshold=1e6, use_ordinal=False,
                    degeneracy=1, **kwargs):
-        eval_hi, evec_hi = self.solve(int(factor*N), L=L, n_eq=n_eq, **kwargs)
+        if factor != 1:
+            eval_hi, evec_hi = self.solve(int(factor*N), L=L, n_eq=n_eq,
+                                          sparse_flag=sparse_flag, sigma=sigma,
+                                          n_eig=n_eig, **kwargs)
 
-        eval_low, evec_low = self.solve(N, L=L, n_eq=n_eq, **kwargs)
+        eval_low, evec_low = self.solve(N, L=L, n_eq=n_eq,
+                                        sparse_flag=sparse_flag, sigma=sigma,
+                                        n_eig=n_eig, **kwargs)
+
+        if factor == 1:
+            eval_hi = eval_low
+            evec_hi = evec_low
+
+        #print(eval_hi, eval_low)
+        #print(eval_low)
+        self.eval_hires = eval_hi
+        self.evec_hires = evec_hi
 
         return self.safe_eval_evec(eval_low, evec_low, eval_hi, evec_hi,
                                    drift_threshold=drift_threshold,

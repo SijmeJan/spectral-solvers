@@ -3,8 +3,13 @@ from scipy.linalg import eigvals, eig
 import scipy.sparse as sparse
 #import matplotlib.pyplot as plt
 
-from petsc4py import PETSc
-from slepc4py import SLEPc
+try:
+    from petsc4py import PETSc
+    from slepc4py import SLEPc
+    can_use_splepc = True
+except ImportError:
+    print('slepc4py not installed, will use scipy')
+    can_use_slepc = False
 
 from .basis import ChebychevBasis, BoundaryCondition, HermiteBasis, LaguerreBasis
 from .mapping import CoordinateMap, ChebychevMap
@@ -165,20 +170,15 @@ class EigenValueSolver(SpectralSolver):
 
     def solve(self, N, L=1, n_eq=1,
               sparse_flag=False, sigma=None, n_eig=6,
+              use_PETSc=False
               **kwargs):
-        #print('EigenvalueSolver.solve:', N, L, n_eq, sparse_flag, sigma, n_eig)
-
         self.set_resolution(N, L=L, n_eq=n_eq, sparse_flag=sparse_flag)
 
         # Construct left-hand side matrix
         M = self.matrixM(sparse_flag=sparse_flag, **kwargs)
 
-        #print('Matrix size:', N*(4*n_eq + 4))
-
-        use_PETSc = True
-
         if sparse_flag == True:
-            if use_PETSc == True:
+            if use_PETSc == True and can_use_slepc == True:
                 petsc_M = PETSc.Mat().createBAIJ(size=M.shape,
                                                  bsize=M.blocksize,
                                                  csr=(M.indptr,
@@ -231,6 +231,8 @@ class EigenValueSolver(SpectralSolver):
                        drift_threshold=1e6, use_ordinal=False,
                        degeneracy=1):
         # Returns 'safe' eigenvalues and eigenvectors using two resolutions
+        # Based on the eigentools package
+        # (Oishi et al 2021, doi:10.21105/joss.03079)
 
         # Reverse engineer correct indices to make unsorted list from sorted
         reverse_eval_low_indx = np.arange(len(eval_low))
@@ -268,9 +270,6 @@ class EigenValueSolver(SpectralSolver):
                                      eval_low_sorted[-degen:])
         else:
             sigmas += 1.0
-
-        if not (np.isfinite(sigmas)).all():
-            logger.warning("At least one eigenvalue spacings (sigmas) is non-finite (np.inf or np.nan)!")
 
         # Ordinal delta
         self.delta_ordinal = np.array([np.abs(eval_low_sorted[j] - \

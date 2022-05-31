@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.linalg import eigvals, eig
 import scipy.sparse as sparse
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 
 from petsc4py import PETSc
 from slepc4py import SLEPc

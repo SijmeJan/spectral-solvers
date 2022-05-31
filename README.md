@@ -16,7 +16,8 @@ Clone PETSc repository:
 
 Follow the instructions
 [here](https://petsc.org/release/install/install_tutorial/#qqtw-quickest-quick-start-in-the-west)
-to install PETSc. As a minimal installation, do
+to install PETSc. As a minimal installation, go into the `petsc`
+directory and do
 
     ./configure --with-fc=0
     make all check

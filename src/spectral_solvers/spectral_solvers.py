@@ -6,7 +6,7 @@ import scipy.sparse as sparse
 try:
     from petsc4py import PETSc
     from slepc4py import SLEPc
-    can_use_splepc = True
+    can_use_slepc = True
 except ImportError:
     print('slepc4py not installed, will use scipy')
     can_use_slepc = False
@@ -257,7 +257,11 @@ class EigenValueSolver(SpectralSolver):
 
         # Compute sigmas from lower resolution run (gridnum = N1)
         degen = degeneracy
-        sigmas = np.zeros(len(eval_low_sorted))
+
+        # Should be the same length, unless sparse solver did not converge
+        n_eig = np.min([len(eval_low_sorted), len(eval_hi_sorted)])
+
+        sigmas = np.zeros(n_eig)
         if len(sigmas) > degen:
             sigmas[0:degen] = np.abs(eval_low_sorted[0:degen] - \
                                      eval_low_sorted[degen:2*degen])
@@ -265,7 +269,7 @@ class EigenValueSolver(SpectralSolver):
               [0.5*(np.abs(eval_low_sorted[j] - \
                     eval_low_sorted[j - degen]) + \
                   np.abs(eval_low_sorted[j + degen] - eval_low_sorted[j])) \
-                  for j in range(degen, len(eval_low_sorted) - degen)]
+                  for j in range(degen, n_eig - degen)]
             sigmas[-degen:] = np.abs(eval_low_sorted[-2*degen:-degen] - \
                                      eval_low_sorted[-degen:])
         else:
@@ -274,14 +278,14 @@ class EigenValueSolver(SpectralSolver):
         # Ordinal delta
         self.delta_ordinal = np.array([np.abs(eval_low_sorted[j] - \
                                        eval_hi_sorted[j])/sigmas[j] \
-                                        for j in range(len(eval_low_sorted))])
+                                        for j in range(n_eig)])
 
         # Nearest delta
         small = 1.0e-16
         self.delta_near = \
           np.array([np.nanmin(np.abs(eval_low_sorted[j] -
                               eval_hi_sorted)/sigmas[j]) + small \
-                        for j in range(len(eval_low_sorted))])
+                        for j in range(n_eig)])
 
 
         # Discard eigenvalues with 1/delta_near < drift_threshold
@@ -303,16 +307,19 @@ class EigenValueSolver(SpectralSolver):
 
     def safe_solve(self, N, L=1, n_eq=1,
                    sparse_flag=False, sigma=None, n_eig=6,
+                   use_PETSc=False,
                    factor=2, drift_threshold=1e6, use_ordinal=False,
                    degeneracy=1, **kwargs):
         if factor != 1:
             eval_hi, evec_hi = self.solve(int(factor*N), L=L, n_eq=n_eq,
                                           sparse_flag=sparse_flag, sigma=sigma,
+                                          use_PETSc=use_PETSc,
                                           n_eig=n_eig, **kwargs)
 
         eval_low, evec_low = self.solve(N, L=L, n_eq=n_eq,
                                         sparse_flag=sparse_flag, sigma=sigma,
-                                        n_eig=n_eig, **kwargs)
+                                        n_eig=n_eig, use_PETSc=use_PETSc,
+                                        **kwargs)
 
         if factor == 1:
             eval_hi = eval_low

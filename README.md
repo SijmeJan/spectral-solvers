@@ -19,7 +19,7 @@ Follow the instructions
 to install PETSc. As a minimal installation, go into the `petsc`
 directory and do
 
-    ./configure --with-fc=0
+    ./configure --with-fc=0 --with-scalar-type=complex
     make all check
 
 Make sure the `PETSC_ARCH` and `PETSC_DIR` environment variables are

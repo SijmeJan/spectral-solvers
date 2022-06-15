@@ -7,6 +7,7 @@ try:
     from petsc4py import PETSc
     from slepc4py import SLEPc
     can_use_slepc = True
+    print('Will use slepc/petc', flush=True)
 except ImportError:
     print('Can not import slepc/petc not installed, will use scipy', flush=True)
     can_use_slepc = False

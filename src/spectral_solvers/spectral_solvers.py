@@ -14,6 +14,84 @@ except ImportError:
 from .basis import ChebychevBasis, BoundaryCondition, HermiteBasis, LaguerreBasis
 from .mapping import CoordinateMap, ChebychevMap
 
+def safe_eval_evec(eval_low, evec_low, eval_hi, evec_hi,
+                   drift_threshold=1e6, use_ordinal=False,
+                   degeneracy=1):
+    # Returns 'safe' eigenvalues and eigenvectors using two resolutions
+    # Based on the eigentools package
+    # (Oishi et al 2021, doi:10.21105/joss.03079)
+
+    # Reverse engineer correct indices to make unsorted list from sorted
+    reverse_eval_low_indx = np.arange(len(eval_low))
+    reverse_eval_hi_indx = np.arange(len(eval_hi))
+
+    eval_low_and_indx = \
+      np.asarray(list(zip(eval_low, reverse_eval_low_indx)))
+    eval_hi_and_indx = np.asarray(list(zip(eval_hi, reverse_eval_hi_indx)))
+
+    # remove nans
+    eval_low_and_indx = eval_low_and_indx[np.isfinite(eval_low)]
+    eval_hi_and_indx = eval_hi_and_indx[np.isfinite(eval_hi)]
+
+    # Sort eval_low and eval_hi by real parts
+    eval_low_and_indx = \
+      eval_low_and_indx[np.argsort(eval_low_and_indx[:, 0].real)]
+    eval_hi_and_indx = \
+      eval_hi_and_indx[np.argsort(eval_hi_and_indx[:, 0].real)]
+
+    eval_low_sorted = eval_low_and_indx[:, 0]
+    eval_hi_sorted = eval_hi_and_indx[:, 0]
+
+    # Compute sigmas from lower resolution run (gridnum = N1)
+    degen = degeneracy
+
+    # Should be the same length, unless sparse solver did not converge
+    n_eig = np.min([len(eval_low_sorted), len(eval_hi_sorted)])
+
+    sigmas = np.zeros(n_eig)
+    if len(sigmas) > degen:
+        sigmas[0:degen] = np.abs(eval_low_sorted[0:degen] - \
+                                 eval_low_sorted[degen:2*degen])
+        sigmas[degen:-degen] = \
+          [0.5*(np.abs(eval_low_sorted[j] - \
+                eval_low_sorted[j - degen]) + \
+                np.abs(eval_low_sorted[j + degen] - eval_low_sorted[j])) \
+                for j in range(degen, n_eig - degen)]
+        sigmas[-degen:] = np.abs(eval_low_sorted[-2*degen:-degen] - \
+                                 eval_low_sorted[-degen:])
+    else:
+        sigmas += 1.0
+
+    # Ordinal delta
+    delta_ordinal = np.array([np.abs(eval_low_sorted[j] - \
+                              eval_hi_sorted[j])/sigmas[j] \
+                              for j in range(n_eig)])
+
+    # Nearest delta
+    small = 1.0e-16
+    delta_near = \
+      np.array([np.nanmin(np.abs(eval_low_sorted[j] -
+                          eval_hi_sorted)/sigmas[j]) + small \
+                for j in range(n_eig)])
+
+
+    # Discard eigenvalues with 1/delta_near < drift_threshold
+    if use_ordinal:
+        inverse_drift = 1/delta_ordinal
+    else:
+        inverse_drift = 1/(delta_near + small)
+    eval_low_and_indx = \
+      eval_low_and_indx[np.where(inverse_drift > drift_threshold)]
+
+    eval_low = eval_low_and_indx[:, 0]
+    indx = eval_low_and_indx[:, 1].real.astype(np.int)
+
+    evec = []
+    for i in indx:
+        evec.append(evec_low[:, i])
+
+    return eval_low, evec
+
 class SpectralSolver():
     # Turn a set of equations A*u'' + B*u' + C*u = w*u + E
     # into a matrix equation M*U = N*U + S by decomposing u into
@@ -174,6 +252,10 @@ class EigenValueSolver(SpectralSolver):
               **kwargs):
         self.set_resolution(N, L=L, n_eq=n_eq, sparse_flag=sparse_flag)
 
+        # Try and find *all* eigenvalues
+        if n_eig < 0:
+            n_eig = n_eq*N
+
         # Construct left-hand side matrix
         M = self.matrixM(sparse_flag=sparse_flag, **kwargs)
 
@@ -227,110 +309,36 @@ class EigenValueSolver(SpectralSolver):
         else:
             return eig(M, self.B)
 
-    def safe_eval_evec(self, eval_low, evec_low, eval_hi, evec_hi,
-                       drift_threshold=1e6, use_ordinal=False,
-                       degeneracy=1):
-        # Returns 'safe' eigenvalues and eigenvectors using two resolutions
-        # Based on the eigentools package
-        # (Oishi et al 2021, doi:10.21105/joss.03079)
-
-        # Reverse engineer correct indices to make unsorted list from sorted
-        reverse_eval_low_indx = np.arange(len(eval_low))
-        reverse_eval_hi_indx = np.arange(len(eval_hi))
-
-        eval_low_and_indx = \
-          np.asarray(list(zip(eval_low, reverse_eval_low_indx)))
-        eval_hi_and_indx = np.asarray(list(zip(eval_hi, reverse_eval_hi_indx)))
-
-        # remove nans
-        eval_low_and_indx = eval_low_and_indx[np.isfinite(eval_low)]
-        eval_hi_and_indx = eval_hi_and_indx[np.isfinite(eval_hi)]
-
-        # Sort eval_low and eval_hi by real parts
-        eval_low_and_indx = \
-          eval_low_and_indx[np.argsort(eval_low_and_indx[:, 0].real)]
-        eval_hi_and_indx = \
-          eval_hi_and_indx[np.argsort(eval_hi_and_indx[:, 0].real)]
-
-        eval_low_sorted = eval_low_and_indx[:, 0]
-        eval_hi_sorted = eval_hi_and_indx[:, 0]
-
-        # Compute sigmas from lower resolution run (gridnum = N1)
-        degen = degeneracy
-
-        # Should be the same length, unless sparse solver did not converge
-        n_eig = np.min([len(eval_low_sorted), len(eval_hi_sorted)])
-
-        sigmas = np.zeros(n_eig)
-        if len(sigmas) > degen:
-            sigmas[0:degen] = np.abs(eval_low_sorted[0:degen] - \
-                                     eval_low_sorted[degen:2*degen])
-            sigmas[degen:-degen] = \
-              [0.5*(np.abs(eval_low_sorted[j] - \
-                    eval_low_sorted[j - degen]) + \
-                  np.abs(eval_low_sorted[j + degen] - eval_low_sorted[j])) \
-                  for j in range(degen, n_eig - degen)]
-            sigmas[-degen:] = np.abs(eval_low_sorted[-2*degen:-degen] - \
-                                     eval_low_sorted[-degen:])
-        else:
-            sigmas += 1.0
-
-        # Ordinal delta
-        self.delta_ordinal = np.array([np.abs(eval_low_sorted[j] - \
-                                       eval_hi_sorted[j])/sigmas[j] \
-                                        for j in range(n_eig)])
-
-        # Nearest delta
-        small = 1.0e-16
-        self.delta_near = \
-          np.array([np.nanmin(np.abs(eval_low_sorted[j] -
-                              eval_hi_sorted)/sigmas[j]) + small \
-                        for j in range(n_eig)])
-
-
-        # Discard eigenvalues with 1/delta_near < drift_threshold
-        if use_ordinal:
-            inverse_drift = 1/self.delta_ordinal
-        else:
-            inverse_drift = 1/(self.delta_near + small)
-        eval_low_and_indx = \
-          eval_low_and_indx[np.where(inverse_drift > drift_threshold)]
-
-        eval_low = eval_low_and_indx[:, 0]
-        indx = eval_low_and_indx[:, 1].real.astype(np.int)
-
-        evec = []
-        for i in indx:
-            evec.append(evec_low[:, i])
-
-        return eval_low, evec
-
     def safe_solve(self, N, L=1, n_eq=1,
                    sparse_flag=False, sigma=None, n_eig=6,
                    use_PETSc=False,
                    factor=2, drift_threshold=1e6, use_ordinal=False,
                    degeneracy=1, **kwargs):
-        if factor != 1:
-            eval_hi, evec_hi = self.solve(int(factor*N), L=L, n_eq=n_eq,
-                                          sparse_flag=sparse_flag, sigma=sigma,
-                                          use_PETSc=use_PETSc,
-                                          n_eig=n_eig, **kwargs)
+        n_safe_levels=2
 
-        eval_low, evec_low = self.solve(N, L=L, n_eq=n_eq,
-                                        sparse_flag=sparse_flag, sigma=sigma,
-                                        n_eig=n_eig, use_PETSc=use_PETSc,
-                                        **kwargs)
+        N_high = int(factor**(n_safe_levels)*N)
+        eval_hi, evec_hi = self.solve(N_high, L=L, n_eq=n_eq,
+                                      sparse_flag=sparse_flag,
+                                      sigma=sigma,
+                                      use_PETSc=use_PETSc,
+                                      n_eig=n_eig, **kwargs)
 
-        if factor == 1:
-            eval_hi = eval_low
-            evec_hi = evec_low
-
-        #print(eval_hi, eval_low)
-        #print(eval_low)
         self.eval_hires = eval_hi
         self.evec_hires = evec_hi
 
-        return self.safe_eval_evec(eval_low, evec_low, eval_hi, evec_hi,
-                                   drift_threshold=drift_threshold,
-                                   use_ordinal=use_ordinal,
-                                   degeneracy=degeneracy)
+        for n_safe in range(0, n_safe_levels):
+            N_low = int(factor**(n_safe_levels - n_safe - 1)*N)
+            eval_low, evec_low = self.solve(N_low, L=L, n_eq=n_eq,
+                                            sparse_flag=sparse_flag,
+                                            sigma=sigma,
+                                            n_eig=n_eig,
+                                            use_PETSc=use_PETSc,
+                                            **kwargs)
+
+            eval_hi, evec_hi = \
+              safe_eval_evec(eval_low, evec_low, eval_hi, evec_hi,
+                             drift_threshold=drift_threshold,
+                             use_ordinal=use_ordinal,
+                             degeneracy=degeneracy)
+
+        return eval_hi, evec_hi

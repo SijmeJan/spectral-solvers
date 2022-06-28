@@ -313,9 +313,7 @@ class EigenValueSolver(SpectralSolver):
                    sparse_flag=False, sigma=None, n_eig=6,
                    use_PETSc=False,
                    factor=2, drift_threshold=1e6, use_ordinal=False,
-                   degeneracy=1, **kwargs):
-        n_safe_levels=2
-
+                   degeneracy=1, n_safe_levels=1, **kwargs):
         N_high = int(factor**(n_safe_levels)*N)
         eval_hi, evec_hi = self.solve(N_high, L=L, n_eq=n_eq,
                                       sparse_flag=sparse_flag,

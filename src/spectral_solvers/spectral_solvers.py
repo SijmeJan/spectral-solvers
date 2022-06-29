@@ -90,7 +90,7 @@ def safe_eval_evec(eval_low, evec_low, eval_hi, evec_hi,
     for i in indx:
         evec.append(evec_low[:, i])
 
-    return eval_low, evec
+    return eval_low, np.asarray(evec)
 
 class SpectralSolver():
     # Turn a set of equations A*u'' + B*u' + C*u = w*u + E

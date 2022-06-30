@@ -343,6 +343,15 @@ class EigenValueSolver(SpectralSolver):
                                             use_PETSc=use_PETSc,
                                             **kwargs)
 
+            if len(eval_low) == 0 or len(eval_hi) == 0:
+                # Something has gone wrong: no converged eigenvalues
+                rad = 0
+                if len(eval_low) > 0:
+                    rad = np.max(np.abs(sigma - eval_low))
+                if len(eval_hi) > 0:
+                    rad = np.max(np.abs(sigma - eval_hi))
+                return [], [], rad
+
             eval_hi, evec_hi = \
               safe_eval_evec(eval_low, evec_low, eval_hi, evec_hi,
                              drift_threshold=drift_threshold,

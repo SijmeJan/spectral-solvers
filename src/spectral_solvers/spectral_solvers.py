@@ -21,7 +21,7 @@ def safe_eval_evec(eval_low, evec_low, eval_hi, evec_hi,
     # Based on the eigentools package
     # (Oishi et al 2021, doi:10.21105/joss.03079)
 
-    print('safe_eval_evec: ', len(eval_low), len(eval_hi), flush=True)
+    #print('safe_eval_evec: ', len(eval_low), len(eval_hi), flush=True)
     # Reverse engineer correct indices to make unsorted list from sorted
     reverse_eval_low_indx = np.arange(len(eval_low))
     reverse_eval_hi_indx = np.arange(len(eval_hi))

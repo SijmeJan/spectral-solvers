@@ -102,14 +102,21 @@ class SpectralSolver():
     def __init__(self,
                  interval=[0, 1],
                  symmetry=None,
-                 basis='Chebychev'):
+                 basis='Chebychev',
+                 sparse_flag=True,
+                 use_PETSc=True):
         self.basis_kind = basis
         self.symmetry = symmetry
         self.interval = interval
 
+        self.sparse_flag = sparse_flag
+        self.use_PETSc = use_PETSc
+        if can_use_slepc == False:
+            self.use_PETSc = False
+
         self.N = -1
 
-    def set_resolution(self, N, L=1, n_eq=1, sparse_flag=False):
+    def set_resolution(self, N, L=1, n_eq=1):
         # Coordinate mapping and basis functions
         if self.basis_kind == 'Hermite':
             self.mapping = CoordinateMap(L=L)
@@ -151,7 +158,7 @@ class SpectralSolver():
         self.B = \
           sparse.bsr_matrix((data, indices, indptr), shape=(n_eq*N, n_eq*N))
 
-        if sparse_flag == False:
+        if self.sparse_flag == False:
             self.B = self.B.todense()
 
     def construct_a(self, filename=None):
@@ -248,20 +255,19 @@ class EigenValueSolver(SpectralSolver):
         return self.ddA
 
     def solve(self, N, L=1, n_eq=1,
-              sparse_flag=False, sigma=None, n_eig=6,
-              use_PETSc=False,
+              sigma=None, n_eig=6,
               **kwargs):
-        self.set_resolution(N, L=L, n_eq=n_eq, sparse_flag=sparse_flag)
+        self.set_resolution(N, L=L, n_eq=n_eq)
 
         # Try and find *all* eigenvalues
         if n_eig < 0:
             n_eig = n_eq*N
 
         # Construct left-hand side matrix
-        M = self.matrixM(sparse_flag=sparse_flag, **kwargs)
+        M = self.matrixM(**kwargs)
 
-        if sparse_flag == True:
-            if use_PETSc == True and can_use_slepc == True:
+        if self.sparse_flag == True:
+            if self.use_PETSc == True:
                 petsc_M = PETSc.Mat().createBAIJ(size=M.shape,
                                                  bsize=M.blocksize,
                                                  csr=(M.indptr,
@@ -319,16 +325,13 @@ class EigenValueSolver(SpectralSolver):
             return eig(M, self.B)
 
     def safe_solve(self, N, L=1, n_eq=1,
-                   sparse_flag=False, sigma=None, n_eig=6,
-                   use_PETSc=False,
+                   sigma=None, n_eig=6,
                    factor=2, drift_threshold=1e6, use_ordinal=False,
                    degeneracy=1, n_safe_levels=1,
                    **kwargs):
         N_high = int(factor**(n_safe_levels)*N)
         eval_hi, evec_hi = self.solve(N_high, L=L, n_eq=n_eq,
-                                      sparse_flag=sparse_flag,
                                       sigma=sigma,
-                                      use_PETSc=use_PETSc,
                                       n_eig=n_eig, **kwargs)
 
         self.eval_hires = eval_hi
@@ -337,10 +340,8 @@ class EigenValueSolver(SpectralSolver):
         for n_safe in range(0, n_safe_levels):
             N_low = int(factor**(n_safe_levels - n_safe - 1)*N)
             eval_low, evec_low = self.solve(N_low, L=L, n_eq=n_eq,
-                                            sparse_flag=sparse_flag,
                                             sigma=sigma,
                                             n_eig=n_eig,
-                                            use_PETSc=use_PETSc,
                                             **kwargs)
 
             if len(eval_low) == 0 or len(eval_hi) == 0:
